@@ -1,18 +1,42 @@
 
-name: CI/CD for Dockerized FastAPI App
+name: CI/CD for FastAPI Docker Application
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
 
   # Job 1: Run FastAPI tests
   build-and-test:
-    name: Build and Test FastAPI Application
+    name: Build and Test FastAPI
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d test_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      POSTGRES_DB: test_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/test_db
 
     steps:
       - name: Checkout code
@@ -29,9 +53,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Run database migrations
+        run: alembic upgrade head
+
       - name: Run Pytest
-        run: |
-          pytest -v
+        run: pytest -v
+
 
   # Job 2: Build Docker Image
   dockerbuild:
@@ -43,19 +70,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build Docker Image
-        run: |
-          docker build . \
-            --file DockerFile \
-            --tag fastapi-app:latest
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: fastapi-app:latest
 
-  # Job 3: Build and Push Docker Image to Docker Hub
+
+  # Job 3: Build and Push Image to Docker Hub
   build-and-publish:
-    name: Publish FastAPI Docker Image
+    name: Publish FastAPI Image to Docker Hub
     runs-on: ubuntu-latest
-    needs: [build-and-test, dockerbuild]
+    needs:
+      - build-and-test
+      - dockerbuild
 
-    # Only publish images when code is pushed to main
+    # Publish only on push to main
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
@@ -76,11 +111,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./DockerFile
+          file: ./Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/fastapi-app:latest
-            ${{ secrets.DOCKER_USERNAME }}/fastapi-app:${{ github.sha }}
+            ${{ secrets.DOCKER_USERNAME }}/user-management-api:latest
+            ${{ secrets.DOCKER_USERNAME }}/user-management-api:${{ github.sha }}
 
-      - name: Display Image Digest
+      - name: Display Docker Image Digest
         run: echo "Image digest: ${{ steps.build-and-publish.outputs.digest }}"
